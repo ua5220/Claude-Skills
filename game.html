@@ -1,0 +1,1094 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ПОГОНЯ — Аркадная гонка</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#000;overflow:hidden;font-family:'Segoe UI',Arial,sans-serif;user-select:none}
+canvas{display:block}
+#game-canvas{position:fixed;top:0;left:0;z-index:1}
+#cut-canvas{position:fixed;top:0;left:0;z-index:40;display:none}
+#fade{position:fixed;top:0;left:0;width:100%;height:100%;background:#000;z-index:50;opacity:0;pointer-events:none;transition:opacity 0.8s}
+#hud{position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:10}
+#stars{position:fixed;top:12px;right:18px;z-index:11;font-size:30px;color:#555;font-family:monospace;letter-spacing:4px}
+#speed{position:fixed;bottom:18px;right:18px;z-index:11;font-size:16px;color:#0f0;font-family:monospace}
+#hint{position:fixed;bottom:45%;left:50%;transform:translateX(-50%);z-index:30;font-size:20px;color:#fff;font-family:monospace;background:rgba(0,0,0,.7);padding:10px 24px;border-radius:8px;opacity:0;transition:opacity .4s;white-space:nowrap}
+#controls{position:fixed;top:12px;left:14px;z-index:11;color:rgba(255,255,255,.4);font-size:11px;font-family:monospace;line-height:1.6}
+#minimap{position:fixed;bottom:14px;left:14px;z-index:11;border:2px solid rgba(255,255,255,.2);border-radius:4px}
+#dlg{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);width:65%;max-width:660px;z-index:60;background:rgba(0,0,0,.88);border:1px solid #666;border-radius:10px;padding:18px;color:#fff;font-size:15px;display:none;pointer-events:auto}
+#dlg-text{margin-bottom:10px;line-height:1.5;min-height:30px}
+#dlg-opts{display:flex;flex-wrap:wrap;gap:6px}
+#dlg-opts button{background:rgba(255,255,255,.08);border:1px solid #777;color:#fff;padding:7px 14px;border-radius:5px;cursor:pointer;font-size:13px;pointer-events:auto}
+#dlg-opts button:hover{background:rgba(255,255,255,.2)}
+#court{position:fixed;top:0;left:0;width:100%;height:100%;z-index:55;display:none;background:rgba(18,8,4,.96);pointer-events:auto;overflow-y:auto}
+#timer{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:35;font-size:32px;color:#fff;font-family:monospace;display:none;text-align:center}
+#start{position:fixed;top:0;left:0;width:100%;height:100%;z-index:100;background:linear-gradient(135deg,#1a0a2e,#16213e,#0f3460);display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff}
+#start h1{font-size:56px;margin-bottom:8px;background:linear-gradient(90deg,#ff6b6b,#ffd93d,#6bcb77);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+#start h2{font-size:20px;color:#aaa;margin-bottom:32px}
+#start .rules{background:rgba(255,255,255,.07);border-radius:10px;padding:22px;max-width:520px;margin-bottom:26px;text-align:left;font-size:13px;line-height:1.9}
+#start .rules h3{color:#ffd93d;margin-bottom:8px;font-size:16px}
+#start button{background:linear-gradient(90deg,#e74c3c,#c0392b);border:none;color:#fff;padding:14px 46px;font-size:20px;border-radius:28px;cursor:pointer;transition:transform .2s,box-shadow .2s;box-shadow:0 4px 18px rgba(231,76,60,.4)}
+#start button:hover{transform:scale(1.05);box-shadow:0 7px 26px rgba(231,76,60,.6)}
+</style>
+</head>
+<body>
+<div id="start">
+<h1>ПОГОНЯ</h1>
+<h2>Аркадная гонка с полицией</h2>
+<div class="rules">
+<h3>Правила игры:</h3>
+• WASD / Стрелки — управление автомобилем<br>
+• Пробел — ручной тормоз / дрифт<br>
+• Соблюдайте ПДД: не проезжайте на красный свет<br>
+• Столкновение с другими машинами и нарушения = звёзды розыска<br>
+• Чем больше звёзд — тем больше полиции, появляются шипы<br>
+• 4–5 звёзд — вас ожидает суд!<br>
+• При аресте: 1-4 — эмоции, R — сопротивление<br>
+• В тюрьме: WASD ходить, F — позвать охрану, P — ускорить время<br>
+<br>
+<span style="color:#e74c3c">⚠ Касание полицейской машины = арест!</span>
+</div>
+<button onclick="initGame()">НАЧАТЬ ИГРУ</button>
+</div>
+<canvas id="game-canvas"></canvas>
+<canvas id="cut-canvas"></canvas>
+<canvas id="minimap" width="170" height="170"></canvas>
+<div id="hud">
+<div id="stars">☆☆☆☆☆</div>
+<div id="speed">0 км/ч</div>
+<div id="controls">WASD — газ/поворот<br>Пробел — тормоз</div>
+</div>
+<div id="fade"></div>
+<div id="hint"></div>
+<div id="dlg"><div id="dlg-text"></div><div id="dlg-opts"></div></div>
+<div id="timer"></div>
+<div id="court"></div>
+
+<script>
+"use strict";
+
+/* =============== AUDIO =============== */
+const Audio_ = {
+  ctx: null, nodes: {}, init() {
+    if (this.ctx) return;
+    try { this.ctx = new (window.AudioContext||window.webkitAudioContext)(); } catch(e){}
+  },
+  play(id, freq, type, vol, dur, loop) {
+    if (!this.ctx) return;
+    if (this.nodes[id]) { if (loop) return; this.stop(id); }
+    try {
+      const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+      o.type = type; o.frequency.value = freq;
+      g.gain.value = Math.min(vol, .12);
+      o.connect(g); g.connect(this.ctx.destination); o.start();
+      this.nodes[id] = {o, g};
+      if (!loop && dur) setTimeout(()=>this.stop(id), dur);
+    } catch(e){}
+  },
+  stop(id) {
+    const n = this.nodes[id]; if (!n) return;
+    try { n.g.gain.linearRampToValueAtTime(0, this.ctx.currentTime+.08);
+      setTimeout(()=>{ try{n.o.stop();}catch(e){} delete this.nodes[id]; }, 100);
+    } catch(e){ delete this.nodes[id]; }
+  },
+  fade(id, ms) {
+    const n = this.nodes[id]; if (!n) return;
+    try { n.g.gain.linearRampToValueAtTime(0, this.ctx.currentTime+ms/1000);
+      setTimeout(()=>{ try{n.o.stop();}catch(e){} delete this.nodes[id]; }, ms+50);
+    } catch(e){ delete this.nodes[id]; }
+  },
+  stopAll(){ Object.keys(this.nodes).forEach(k=>this.stop(k)); },
+  engine(spd){
+    if (!this.ctx) return;
+    const f = 60+spd*3;
+    if (this.nodes.eng) { try{this.nodes.eng.o.frequency.value=f;}catch(e){} }
+    else this.play('eng',f,'sawtooth',.025,0,true);
+  },
+  siren(on){
+    if (on) { this.play('s1',620,'sine',.04,0,true); this.play('s2',780,'sine',.03,0,true); }
+    else { this.fade('s1',1200); this.fade('s2',1200); }
+  },
+  click(){ this.play('ck',2200,'square',.06,40,false); },
+  cuff(){
+    if (!this.ctx) return;
+    [0,100,200].forEach((d,i)=>setTimeout(()=>{
+      this.play('cf'+i,2800+i*400,'sawtooth',.05,70,false);
+    },d));
+  },
+  brake(){ this.play('brk',180,'sawtooth',.04,150,false); },
+  prison(on){ if(on) this.play('pr',90,'sine',.018,0,true); else this.fade('pr',800); },
+  drama(on){ if(on) this.play('dr',140,'triangle',.03,0,true); else this.fade('dr',1500); }
+};
+
+/* =============== GLOBALS =============== */
+const $ = id => document.getElementById(id);
+const cvs = $('game-canvas'), c = cvs.getContext('2d');
+const cCvs = $('cut-canvas'), cc = cCvs.getContext('2d');
+const mCvs = $('minimap'), mc = mCvs.getContext('2d');
+let W, H;
+function resize(){ W=cvs.width=cCvs.width=innerWidth; H=cvs.height=cCvs.height=innerHeight; }
+resize(); addEventListener('resize', resize);
+
+const keys = {};
+addEventListener('keydown', e=>{ keys[e.code]=true; e.preventDefault(); });
+addEventListener('keyup', e=>{ keys[e.code]=false; });
+
+/* =============== CONSTANTS =============== */
+const T = 70; // tile size
+const CW = 64, CH = 64; // city grid size
+const ROAD = 3, BLOCK = 6;
+
+/* =============== STATE =============== */
+const PH = { DRIVE:0, FADE:1, EXIT:2, CUFF:3, WALK:4, ENTER:5, RIDE:6, PRISON:7, COURT:8 };
+let phase = PH.DRIVE;
+let stars = 0, violations = [], gameTime = 0;
+let fadeA = 0, vignetteI = 0;
+let grid=[], blds=[], tlights=[], spikes_=[];
+
+/* Player */
+const P = { x:0,y:0, a:0, spd:0, maxSpd:4.2, acc:.065, brk:.12, fric:.018, turn:.032, w:28, h:46, drift:false };
+/* Police */
+let cops = [];
+/* Arrest */
+let ar = {};
+/* Prison */
+let pr = {};
+/* Court */
+let ct = {};
+
+let running = false, lastT = 0;
+
+/* =============== CITY GEN =============== */
+function genCity(){
+  grid=[]; blds=[]; tlights=[]; spikes_=[];
+  for(let y=0;y<CH;y++){ grid[y]=[]; for(let x=0;x<CW;x++) grid[y][x]=0; }
+  // horizontal roads
+  for(let by=0;by<CH;by+=BLOCK+ROAD)
+    for(let r=0;r<ROAD;r++) if(by+r<CH) for(let x=0;x<CW;x++) grid[by+r][x]=1;
+  // vertical roads
+  for(let bx=0;bx<CW;bx+=BLOCK+ROAD)
+    for(let r=0;r<ROAD;r++) if(bx+r<CW) for(let y=0;y<CH;y++) grid[y][bx+r]=1;
+  // intersections
+  for(let by=0;by<CH;by+=BLOCK+ROAD)
+    for(let bx=0;bx<CW;bx+=BLOCK+ROAD)
+      for(let r1=0;r1<ROAD;r1++) for(let r2=0;r2<ROAD;r2++)
+        if(by+r1<CH&&bx+r2<CW) grid[by+r1][bx+r2]=2;
+
+  // buildings
+  const cols=['#4a4a6a','#5a4a5a','#3a5a6a','#6a5a4a','#5a3a4a','#3a4a5a','#6a4a3a','#4a6a5a','#5a5a4a','#4a3a6a'];
+  for(let by=0;by<CH;by+=BLOCK+ROAD){
+    for(let bx=0;bx<CW;bx+=BLOCK+ROAD){
+      let sx=bx+ROAD, sy=by+ROAD;
+      if(sx>=CW||sy>=CH) continue;
+      let ex=Math.min(sx+BLOCK,CW), ey=Math.min(sy+BLOCK,CH);
+      // fill block with 1-3 buildings
+      let cx=sx;
+      while(cx<ex){
+        let cy=sy;
+        while(cy<ey){
+          let bw=1+Math.floor(Math.random()*Math.min(3,ex-cx));
+          let bh=1+Math.floor(Math.random()*Math.min(3,ey-cy));
+          blds.push({x:cx*T+4,y:cy*T+4,w:bw*T-8,h:bh*T-8,
+            col:cols[Math.floor(Math.random()*cols.length)],
+            fl:1+Math.floor(Math.random()*6)});
+          cy+=bh;
+        }
+        cx+=2+Math.floor(Math.random()*2);
+      }
+    }
+  }
+  // traffic lights
+  for(let by=0;by<CH;by+=BLOCK+ROAD)
+    for(let bx=0;bx<CW;bx+=BLOCK+ROAD)
+      tlights.push({x:(bx+1)*T+T/2,y:(by+1)*T+T/2,
+        st:Math.random()>.5?'r':'g',tm:Math.random()*250+180,mx:280,viol:false});
+}
+
+/* =============== SPAWN =============== */
+function spawnP(){
+  for(let y=4;y<CH;y++) for(let x=4;x<CW;x++){
+    if(grid[y][x]===1){
+      let ok=true;
+      for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++){
+        let ny=y+dy,nx=x+dx;
+        if(ny>=0&&ny<CH&&nx>=0&&nx<CW&&grid[ny][nx]===0) ok=false;
+      }
+      if(ok){ P.x=x*T+T/2; P.y=y*T+T/2; P.a=0; P.spd=0; return; }
+    }
+  }
+}
+
+function spawnCops(n){
+  cops=[];
+  for(let i=0;i<n;i++){
+    let px,py,att=0;
+    do{
+      let gx=Math.floor(Math.random()*CW), gy=Math.floor(Math.random()*CH);
+      if(grid[gy]&&grid[gy][gx]>=1){
+        px=gx*T+T/2; py=gy*T+T/2;
+        if(Math.hypot(px-P.x,py-P.y)>700) break;
+      }
+      att++;
+    }while(att<80);
+    if(px!==undefined) cops.push({x:px,y:py,a:Math.random()*Math.PI*2,spd:0,
+      maxS:2.5+stars*.25,w:28,h:46,st:'patrol',pt:0,ta:0});
+  }
+}
+
+/* =============== COLLISION =============== */
+function bldCol(x,y,hw,hh){
+  for(let b of blds)
+    if(x+hw>b.x&&x-hw<b.x+b.w&&y+hh>b.y&&y-hh<b.y+b.h) return b;
+  return null;
+}
+function carCol(ax,ay,bx,by){ return Math.hypot(ax-bx,ay-by)<30; }
+
+/* =============== STARS =============== */
+function addStar(n,reason){
+  let old=stars; stars=Math.min(5,stars+n);
+  if(reason) violations.push(reason);
+  if(stars>old){
+    for(let i=0;i<(stars-old)*2;i++){
+      let ang=Math.random()*Math.PI*2, d=900+Math.random()*500;
+      let px=P.x+Math.cos(ang)*d, py=P.y+Math.sin(ang)*d;
+      let gx=Math.floor(px/T), gy=Math.floor(py/T);
+      if(gy>=0&&gy<CH&&gx>=0&&gx<CW&&grid[gy][gx]>=1)
+        cops.push({x:px,y:py,a:Math.atan2(P.y-py,P.x-px)+Math.PI/2,spd:0,
+          maxS:2.5+stars*.25,w:28,h:46,st:'chase',pt:0,ta:0});
+    }
+  }
+}
+
+/* =============== UPDATE DRIVE =============== */
+function updDrive(dt){
+  let ac=0,tn=0;
+  if(keys.KeyW||keys.ArrowUp) ac=1;
+  if(keys.KeyS||keys.ArrowDown) ac=-.4;
+  if(keys.KeyA||keys.ArrowLeft) tn=-1;
+  if(keys.KeyD||keys.ArrowRight) tn=1;
+  let brk=keys.Space;
+
+  P.spd+=ac*P.acc*dt;
+  if(brk){ let b=P.brk*dt; P.spd>0?P.spd=Math.max(0,P.spd-b):P.spd=Math.min(0,P.spd+b); P.drift=Math.abs(P.spd)>1.8; }
+  else P.drift=false;
+  P.spd-=P.spd*P.fric*dt;
+  P.spd=Math.max(-1.8,Math.min(P.maxSpd,P.spd));
+  if(Math.abs(P.spd)>.25){
+    let tf=P.drift?1.3:1;
+    P.a+=tn*P.turn*tf*(P.spd/P.maxSpd)*dt;
+  }
+
+  let nx=P.x+Math.sin(P.a)*P.spd*dt, ny=P.y-Math.cos(P.a)*P.spd*dt;
+  if(bldCol(nx,ny,P.w*.35,P.h*.35)){ P.spd*=-.2; nx=P.x; ny=P.y; }
+  P.x=Math.max(T,Math.min((CW-1)*T,nx)); P.y=Math.max(T,Math.min((CH-1)*T,ny));
+
+  // speed violation
+  if(Math.abs(P.spd)>3.8&&Math.random()<.0008*dt) addStar(1,'Превышение скорости');
+
+  // traffic lights
+  for(let tl of tlights){
+    tl.tm-=dt;
+    if(tl.tm<=0){ tl.st=tl.st==='r'?'g':'r'; tl.tm=tl.mx+Math.random()*80; }
+    let d=Math.hypot(P.x-tl.x,P.y-tl.y);
+    if(d<T*1.5&&tl.st==='r'&&Math.abs(P.spd)>1.5&&!tl.viol){
+      tl.viol=true; addStar(1,'Проезд на красный свет');
+      setTimeout(()=>tl.viol=false,4000);
+    }
+  }
+
+  // engine
+  Audio_.engine(Math.abs(P.spd)*22);
+  if(brk&&Math.abs(P.spd)>1) Audio_.brake();
+
+  // police
+  updCops(dt);
+
+  // spikes
+  if(stars>=3&&Math.random()<.0015*stars*dt&&spikes_.length<stars*3){
+    let sa=Math.random()*Math.PI*2, sd=500+Math.random()*400;
+    let sx=P.x+Math.cos(sa)*sd, sy=P.y+Math.sin(sa)*sd;
+    let gx=Math.floor(sx/T),gy=Math.floor(sy/T);
+    if(gy>=0&&gy<CH&&gx>=0&&gx<CW&&grid[gy][gx]>=1)
+      spikes_.push({x:sx,y:sy,a:Math.random()*Math.PI});
+  }
+  for(let i=spikes_.length-1;i>=0;i--){
+    if(Math.hypot(P.x-spikes_[i].x,P.y-spikes_[i].y)<35){
+      P.maxSpd=2; spikes_.splice(i,1); addStar(1,'Шипы (повреждение шин)');
+      setTimeout(()=>P.maxSpd=4.2,8000);
+    }
+  }
+
+  // cop collision
+  for(let cp of cops)
+    if(carCol(P.x,P.y,cp.x,cp.y)){ beginArrest(); return; }
+
+  vignetteI=stars>0?.15+stars*.07:0;
+  stars>=2?Audio_.drama(true):Audio_.drama(false);
+  let chasing=cops.some(cp=>cp.st==='chase'&&Math.hypot(cp.x-P.x,cp.y-P.y)<550);
+  Audio_.siren(chasing&&stars>0);
+}
+
+/* =============== POLICE AI =============== */
+function updCops(dt){
+  for(let cp of cops){
+    let dp=Math.hypot(cp.x-P.x,cp.y-P.y);
+    if(stars>0&&dp<1000) cp.st='chase';
+    else if(dp>1800) cp.st='patrol';
+
+    if(cp.st==='chase'){
+      let ta=Math.atan2(P.x-cp.x,-(P.y-cp.y));
+      let ad=ta-cp.a;
+      while(ad>Math.PI) ad-=Math.PI*2; while(ad<-Math.PI) ad+=Math.PI*2;
+      cp.a+=Math.sign(ad)*Math.min(Math.abs(ad),.045*dt);
+      cp.spd=Math.min(cp.spd+.04*dt,cp.maxS);
+    } else {
+      cp.pt-=dt;
+      if(cp.pt<=0){ cp.ta=cp.a+(Math.random()-.5)*Math.PI*.4; cp.pt=120+Math.random()*180; }
+      let ad=cp.ta-cp.a;
+      while(ad>Math.PI) ad-=Math.PI*2; while(ad<-Math.PI) ad+=Math.PI*2;
+      cp.a+=Math.sign(ad)*Math.min(Math.abs(ad),.018*dt);
+      cp.spd=Math.min(cp.spd+.015*dt,1.3);
+    }
+
+    let nx=cp.x+Math.sin(cp.a)*cp.spd*dt, ny=cp.y-Math.cos(cp.a)*cp.spd*dt;
+    let bl=bldCol(nx,ny,cp.w*.3,cp.h*.3);
+    if(bl){
+      cp.spd*=.2;
+      let aw=Math.atan2(cp.y-(bl.y+bl.h/2),cp.x-(bl.x+bl.w/2));
+      cp.a=Math.atan2(Math.sin(aw),-Math.cos(aw));
+      nx=cp.x+Math.sin(cp.a)*cp.spd*dt; ny=cp.y-Math.cos(cp.a)*cp.spd*dt;
+    }
+    cp.x=Math.max(T,Math.min((CW-1)*T,nx)); cp.y=Math.max(T,Math.min((CH-1)*T,ny));
+  }
+}
+
+/* =============== ARREST =============== */
+function beginArrest(){
+  phase=PH.FADE; fadeA=0; P.spd=0;
+  ar={t:0,px:0,py:0,olx:-180,orx:180,hp:0,wp:0,exitDone:false,emo:'',drv:0,cuffSnd:false};
+  Audio_.stop('eng'); Audio_.drama(false);
+  cCvs.style.display='block';
+}
+
+function updArrest(dt){
+  ar.t+=dt;
+
+  if(phase===PH.FADE){
+    fadeA=Math.min(1,fadeA+.018*dt);
+    if(fadeA>=1){
+      showHint('E — выйти из машины | R — попытаться сбежать');
+      if(keys.KeyE){ phase=PH.EXIT; ar.t=0; hideHint(); Audio_.click(); }
+      if(keys.KeyR){
+        if(Math.random()<.25){ escape_('Вам удалось сбежать! +2 звезды'); return; }
+        else showHint('Побег не удался! Нажмите E.');
+      }
+    }
+    drawArrest(); return;
+  }
+  if(phase===PH.EXIT){
+    let p=Math.min(1,ar.t/50);
+    ar.px=-80+p*80; ar.py=p*15;
+    if(p>=1){ phase=PH.CUFF; ar.t=0; }
+    drawArrest(); return;
+  }
+  if(phase===PH.CUFF){
+    let p=Math.min(1,ar.t/100);
+    ar.hp=p;
+    ar.olx=-180+p*128; ar.orx=180-p*128;
+    if(p>.55&&!ar.cuffSnd){ ar.cuffSnd=true; Audio_.cuff(); }
+    if(p<.4&&keys.KeyR){ ar.emo='⚡ Сопротивление!';
+      if(Math.random()<.12){ escape_('Вы вырвались! +2 звезды'); return; }
+    }
+    readEmo();
+    if(p>=1){ phase=PH.WALK; ar.t=0; }
+    drawArrest(); return;
+  }
+  if(phase===PH.WALK){
+    ar.wp=Math.min(1,ar.t/110);
+    readEmo();
+    if(ar.wp>=1){ phase=PH.ENTER; ar.t=0; }
+    drawArrest(); return;
+  }
+  if(phase===PH.ENTER){
+    let p=Math.min(1,ar.t/50);
+    if(p>=1){ phase=PH.RIDE; ar.t=0; ar.drv=0; }
+    drawArrest(); return;
+  }
+  if(phase===PH.RIDE){
+    ar.drv=Math.min(1,ar.t/200);
+    drawRide();
+    if(ar.drv>=1){
+      Audio_.siren(false); Audio_.stopAll();
+      if(stars>=4) startCourt(); else startPrison();
+    }
+    return;
+  }
+}
+
+function readEmo(){
+  if(keys.Digit1) ar.emo='😰 Страх';
+  if(keys.Digit2) ar.emo='😠 Злость';
+  if(keys.Digit3) ar.emo='😢 Грусть';
+  if(keys.Digit4) ar.emo='😐 Безразличие';
+}
+
+function escape_(msg){
+  phase=PH.DRIVE; fadeA=0; cCvs.style.display='none'; hideHint();
+  addStar(2,'Сопротивление аресту'); P.spd=2.5;
+  showHint(msg); setTimeout(hideHint,3000);
+  Audio_.siren(false);
+}
+
+/* =============== DRAW ARREST =============== */
+function drawArrest(){
+  cc.clearRect(0,0,W,H);
+  // bg
+  cc.fillStyle='#141422'; cc.fillRect(0,0,W,H);
+  // ground
+  cc.fillStyle='#2a2a2a'; cc.fillRect(0,H*.62,W,H*.38);
+  // road line
+  cc.strokeStyle='#444'; cc.lineWidth=2; cc.setLineDash([18,14]);
+  cc.beginPath(); cc.moveTo(0,H*.72); cc.lineTo(W,H*.72); cc.stroke(); cc.setLineDash([]);
+  // streetlights
+  for(let i=0;i<5;i++){
+    let lx=80+i*W/4;
+    cc.fillStyle='#3a3a3a'; cc.fillRect(lx,H*.28,4,H*.34);
+    cc.fillStyle='rgba(255,210,60,.15)'; cc.beginPath(); cc.arc(lx+2,H*.28,22,0,Math.PI*2); cc.fill();
+  }
+
+  let carX=W*.5, carY=H*.66, pcX=W*.22;
+  // police car
+  drawSideCar(cc,pcX,carY,true);
+  // player car
+  drawSideCar(cc,carX,carY,false);
+
+  if(phase===PH.FADE){
+    cc.fillStyle=`rgba(0,0,0,${fadeA})`; cc.fillRect(0,0,W,H);
+    if(fadeA>=1){ cc.fillStyle='#fff'; cc.font='22px monospace'; cc.textAlign='center';
+      cc.fillText('E — выйти | R — побег',W/2,H/2); }
+    return;
+  }
+
+  let gY=H*.58;
+  if(phase===PH.EXIT){
+    let p=Math.min(1,ar.t/50);
+    drawPerson(cc,carX+40+p*30,gY+p*8,'#c0392b','#f5cba7',1,false,0);
+  }
+  if(phase===PH.CUFF){
+    let p=ar.hp, px=carX+70, py=gY+8;
+    drawPerson(cc,px,py,'#c0392b','#f5cba7',1,true,p);
+    drawOfficer_(cc,px+ar.olx,py,1);
+    drawOfficer_(cc,px+ar.orx,py,-1);
+    if(p>.45) drawCuffs(cc,px,py-12,p);
+    drawEmo(cc); drawEmoHint(cc);
+  }
+  if(phase===PH.WALK){
+    let p=ar.wp, sx=carX+70, ex=pcX+50;
+    let px=sx+(ex-sx)*p, py=gY+8, bob=Math.sin(p*Math.PI*10)*2;
+    drawPerson(cc,px,py+bob,'#c0392b','#f5cba7',p>.5?-1:1,true,1);
+    drawOfficer_(cc,px-32,py+bob,1);
+    drawOfficer_(cc,px+32,py+bob,-1);
+    drawCuffs(cc,px,py+bob-12,1);
+    drawEmo(cc); drawEmoHint(cc);
+  }
+  if(phase===PH.ENTER){
+    let p=Math.min(1,ar.t/50);
+    let px=pcX+50-p*40, py=gY+8-p*12, sc=1-p*.3;
+    cc.save(); cc.translate(px,py); cc.scale(sc,sc);
+    // ducking into car
+    cc.fillStyle='#f5cba7'; cc.beginPath(); cc.arc(0,-28-p*4,9,0,Math.PI*2); cc.fill();
+    cc.fillStyle='#c0392b'; cc.fillRect(-7,-18,14,22);
+    cc.restore();
+  }
+}
+
+function drawSideCar(c,x,y,pol){
+  c.fillStyle=pol?'#2c3e50':'#c0392b';
+  c.fillRect(x-28,y-16,56,30);
+  c.fillStyle=pol?'#1a252f':'#a93226';
+  c.fillRect(x-22,y-12,44,20);
+  c.fillStyle='rgba(80,160,255,.3)';
+  c.fillRect(x-18,y-14,36,10);
+  c.fillStyle='#111';
+  c.fillRect(x-30,y-10,5,10); c.fillRect(x+25,y-10,5,10);
+  c.fillRect(x-30,y+5,5,10); c.fillRect(x+25,y+5,5,10);
+  if(pol){
+    let bl=Math.sin(Date.now()*.01)>0;
+    c.fillStyle=bl?'#e74c3c':'#3498db'; c.fillRect(x-10,y-20,9,5);
+    c.fillStyle=bl?'#3498db':'#e74c3c'; c.fillRect(x+1,y-20,9,5);
+  }
+}
+
+function drawPerson(c,x,y,shirt,skin,dir,cuff,cp){
+  c.save(); c.translate(x,y); if(dir<0) c.scale(-1,1);
+  // legs
+  c.fillStyle='#2c3e50'; c.fillRect(-6,2,5,16); c.fillRect(1,2,5,16);
+  // body
+  c.fillStyle=shirt; c.fillRect(-9,-22,18,26);
+  // arms
+  if(cuff&&cp>.1){
+    // arms going behind back
+    c.fillStyle=skin;
+    c.save(); c.translate(-9,-16); c.rotate(-.4*cp); c.fillRect(-2,0,5,13); c.restore();
+    c.save(); c.translate(9,-16); c.rotate(.4*cp); c.fillRect(-3,0,5,13); c.restore();
+  } else {
+    c.fillStyle=skin; c.fillRect(-13,-18,5,15); c.fillRect(8,-18,5,15);
+  }
+  // head
+  c.fillStyle=skin; c.beginPath(); c.arc(0,-31,9,0,Math.PI*2); c.fill();
+  // hair
+  c.fillStyle='#2c2c2c'; c.beginPath(); c.arc(0,-34,9,Math.PI,Math.PI*2); c.fill();
+  c.restore();
+}
+
+function drawOfficer_(c,x,y,dir){
+  c.save(); c.translate(x,y); if(dir<0) c.scale(-1,1);
+  c.fillStyle='#1a1a3a'; c.fillRect(-5,2,5,15); c.fillRect(0,2,5,15);
+  c.fillStyle='#2c3e80'; c.fillRect(-8,-21,16,25);
+  c.fillStyle='#FFD700'; c.fillRect(-3,-16,4,4);
+  c.fillStyle='#2c3e80'; c.fillRect(-12,-17,5,14); c.fillRect(7,-17,5,14);
+  c.fillStyle='#deb887'; c.beginPath(); c.arc(0,-30,8,0,Math.PI*2); c.fill();
+  c.fillStyle='#1a1a3a'; c.fillRect(-9,-38,18,5); c.fillRect(-7,-41,14,5);
+  c.restore();
+}
+
+function drawCuffs(c,x,y,p){
+  let gap=8-p*5;
+  c.strokeStyle='#aaa'; c.lineWidth=2.5;
+  c.beginPath(); c.arc(x-gap,y,4.5,0,Math.PI*2); c.stroke();
+  c.beginPath(); c.arc(x+gap,y,4.5,0,Math.PI*2); c.stroke();
+  c.beginPath(); c.moveTo(x-gap+4,y); c.lineTo(x+gap-4,y); c.stroke();
+}
+
+function drawEmo(c){
+  if(!ar.emo) return;
+  c.fillStyle='rgba(0,0,0,.65)'; c.fillRect(W/2-90,28,180,32);
+  c.fillStyle='#fff'; c.font='15px monospace'; c.textAlign='center'; c.fillText(ar.emo,W/2,50);
+}
+function drawEmoHint(c){
+  c.fillStyle='rgba(255,255,255,.4)'; c.font='12px monospace'; c.textAlign='center';
+  c.fillText('1-Страх 2-Злость 3-Грусть 4-Безразличие | R-Сопротивление',W/2,H-22);
+}
+
+/* =============== RIDE TO STATION =============== */
+function drawRide(){
+  let c=cc, p=ar.drv;
+  c.clearRect(0,0,W,H);
+  c.fillStyle='#080816'; c.fillRect(0,0,W,H);
+  // window frame
+  c.fillStyle='#151520'; c.fillRect(0,0,W,H*.12); c.fillRect(0,H*.88,W,H*.12);
+  c.fillRect(0,0,W*.04,H); c.fillRect(W*.96,0,W*.04,H);
+
+  let sx=p*4000;
+  // sky gradient
+  let gr=c.createLinearGradient(0,H*.12,0,H*.45);
+  gr.addColorStop(0,'#12122a'); gr.addColorStop(1,'#1e2d3d');
+  c.fillStyle=gr; c.fillRect(W*.04,H*.12,W*.92,H*.33);
+
+  // scrolling buildings
+  for(let i=0;i<25;i++){
+    let bx=((i*140-sx%3500)+3500)%3500-200;
+    let bh=60+Math.sin(i*5.7)*50, by=H*.45-bh;
+    c.fillStyle=['#2a2a4a','#3a3a5a','#223344','#44334a'][i%4];
+    c.fillRect(bx+W*.04,by,110,bh);
+    c.fillStyle='rgba(255,210,80,.35)';
+    for(let wy=by+8;wy<H*.45-10;wy+=16)
+      for(let wx=bx+12;wx<bx+100;wx+=22)
+        if(Math.sin(i*wx)>.2) c.fillRect(wx+W*.04,wy,6,8);
+  }
+
+  // road
+  c.fillStyle='#2a2a2a'; c.fillRect(W*.04,H*.45,W*.92,H*.43);
+  c.fillStyle='#444';
+  for(let i=0;i<18;i++){
+    let lx=((i*90-sx%1620)+1620)%1620-40;
+    c.fillRect(lx+W*.04,H*.62,35,3);
+  }
+
+  // street lamps
+  for(let i=0;i<10;i++){
+    let lx=((i*220-sx%2200)+2200)%2200-80;
+    c.fillStyle='#444'; c.fillRect(lx+W*.04,H*.3,3,H*.15);
+    c.fillStyle='rgba(255,200,50,.2)'; c.beginPath(); c.arc(lx+W*.04+1,H*.3,12,0,Math.PI*2); c.fill();
+  }
+
+  // rain
+  c.strokeStyle='rgba(130,160,230,.15)'; c.lineWidth=1;
+  for(let i=0;i<25;i++){
+    let rx=Math.random()*W*.92+W*.04, ry=Math.random()*H*.76+H*.12;
+    c.beginPath(); c.moveTo(rx,ry); c.lineTo(rx-1.5,ry+7); c.stroke();
+  }
+
+  // text
+  if(p>.25&&p<.75){
+    let a=Math.min(1,(p-.25)*6,(.75-p)*6);
+    c.fillStyle=`rgba(255,255,255,${a})`; c.font='26px monospace'; c.textAlign='center';
+    c.fillText(stars>=4?'Вас везут в суд...':'Дорога в участок...',W/2,H/2);
+  }
+  if(p>.82){
+    c.fillStyle=`rgba(0,0,0,${(p-.82)*5.5})`; c.fillRect(0,0,W,H);
+    if(p>.92){
+      c.fillStyle='#fff'; c.font='28px monospace'; c.textAlign='center';
+      c.fillText(stars>=4?'3 часа спустя...':'1 час спустя...',W/2,H/2);
+    }
+  }
+}
+
+/* =============== PRISON =============== */
+function startPrison(){
+  phase=PH.PRISON; cCvs.style.display='block'; fadeA=0;
+  let dur=8+stars*4;
+  pr={px:240,py:380,dir:1,wf:0, gx:560,gy:345,gApp:false,
+    dlg:false,tmr:0,tmrOn:true,rem:dur,dur:dur,
+    canGo:false,showF:true,esc:0};
+  Audio_.stopAll(); Audio_.prison(true);
+}
+
+function updPrison(dt){
+  cc.clearRect(0,0,W,H);
+  drawCell(cc);
+
+  if(!pr.dlg){
+    let ms=1.8;
+    if(keys.KeyA||keys.ArrowLeft){ pr.px-=ms*dt; pr.dir=-1; pr.wf+=.08*dt; }
+    if(keys.KeyD||keys.ArrowRight){ pr.px+=ms*dt; pr.dir=1; pr.wf+=.08*dt; }
+    if(keys.KeyW||keys.ArrowUp){ pr.py-=ms*dt; pr.wf+=.08*dt; }
+    if(keys.KeyS||keys.ArrowDown){ pr.py+=ms*dt; pr.wf+=.08*dt; }
+    pr.px=Math.max(78,Math.min(460,pr.px)); pr.py=Math.max(285,Math.min(435,pr.py));
+
+    if(keys.KeyF&&pr.showF){ pr.showF=false; pr.gApp=true; }
+    if(keys.KeyP&&!pr.canGo) pr.tmr+=.4*dt;
+    if(keys.KeyR&&pr.esc<3&&!pr.dlg){ pr.esc++; if(pr.esc>=3&&Math.random()<.35){ releasePr(true); return; } }
+  }
+
+  if(pr.gApp){
+    pr.gx+=(490-pr.gx)*.025*dt;
+    if(Math.abs(pr.gx-490)<4){ pr.gApp=false; pr.gx=490; startGuardDlg(); }
+  }
+
+  if(pr.tmrOn&&!pr.dlg){
+    pr.tmr+=dt/60;
+    pr.rem=Math.max(0,pr.dur-pr.tmr);
+    if(pr.rem<=0){ pr.canGo=true; pr.tmrOn=false; }
+  }
+
+  drawPrisonPerson(cc,pr.px,pr.py,pr.dir,pr.wf);
+  drawPrisonGuard(cc,pr.gx,pr.gy);
+
+  // HUD
+  let hrs=Math.ceil(pr.rem*2.4);
+  cc.fillStyle='rgba(0,0,0,.7)'; cc.fillRect(W/2-130,16,260,44);
+  cc.textAlign='center'; cc.font='16px monospace';
+  if(pr.canGo){ cc.fillStyle='#2ecc71'; cc.fillText('Срок отбыт! Подойдите к решётке → E',W/2,43); }
+  else { cc.fillStyle='#fff'; cc.fillText(`Осталось: ${hrs} ч (${Math.ceil(pr.rem)} сек)`,W/2,43); }
+
+  cc.fillStyle='rgba(255,255,255,.4)'; cc.font='12px monospace';
+  let h='WASD — ходить | F — охрана | P — ускорить';
+  if(pr.canGo) h+=' | E — выйти';
+  cc.fillText(h,W/2,H-16);
+
+  if(pr.canGo&&pr.px>440&&keys.KeyE) releasePr(false);
+}
+
+function drawCell(c){
+  c.fillStyle='#222'; c.fillRect(0,0,W,H);
+  // cell room
+  c.fillStyle='#3a3530'; c.fillRect(55,255,420,210);
+  c.fillStyle='#4a4540'; c.fillRect(55,430,420,35);
+  c.fillStyle='#2a2520'; c.fillRect(55,255,420,12);
+  // cracks
+  c.strokeStyle='#2a2520'; c.lineWidth=1;
+  for(let i=0;i<4;i++){ c.beginPath(); c.moveTo(100+i*90,270); c.lineTo(110+i*90,310+i*12); c.stroke(); }
+  // bars
+  c.fillStyle='#555';
+  for(let i=0;i<9;i++) c.fillRect(470+i*11,265,3,195);
+  c.fillRect(470,305,97,3); c.fillRect(470,395,97,3);
+  // bed
+  c.fillStyle='#5a4a3a'; c.fillRect(75,385,115,45);
+  c.fillStyle='#6a5a4a'; c.fillRect(75,380,115,7);
+  c.fillStyle='#7a7a6a'; c.fillRect(80,386,28,18);
+  c.fillStyle='#4a5a4a'; c.fillRect(75,400,115,26);
+  // toilet
+  c.fillStyle='#aaa'; c.fillRect(395,405,28,26);
+  c.fillStyle='#888'; c.fillRect(400,398,18,10);
+  // sink
+  c.fillStyle='#999'; c.fillRect(395,305,28,18);
+  c.fillStyle='#777'; c.fillRect(405,298,10,8);
+  // light
+  c.fillStyle='rgba(255,210,80,.1)'; c.fillRect(195,260,90,190);
+  c.fillStyle='#aa9933'; c.fillRect(235,255,18,8);
+  // corridor
+  c.fillStyle='#2a2a2a'; c.fillRect(495,255,W-495,210);
+  c.fillStyle='#3a3a3a'; c.fillRect(495,430,W-495,35);
+}
+
+function drawPrisonPerson(c,x,y,dir,fr){
+  c.save(); c.translate(x,y); if(dir<0) c.scale(-1,1);
+  let lo=Math.sin(fr*3)*2.5;
+  c.fillStyle='#e67e22'; c.fillRect(-6,3+lo,5,14); c.fillRect(1,3-lo,5,14);
+  c.fillStyle='#e67e22'; c.fillRect(-8,-19,16,24);
+  c.fillStyle='#c0392b'; c.fillRect(-8,-14,16,2.5); c.fillRect(-8,-8,16,2.5); c.fillRect(-8,-2,16,2.5);
+  c.fillStyle='#e67e22'; c.fillRect(-12,-15,5,12); c.fillRect(7,-15,5,12);
+  c.fillStyle='#f5cba7'; c.fillRect(-12,-4,5,4); c.fillRect(7,-4,5,4);
+  c.fillStyle='#f5cba7'; c.beginPath(); c.arc(0,-27,8,0,Math.PI*2); c.fill();
+  c.fillStyle='#222'; c.fillRect(-3,-29,2,2); c.fillRect(1,-29,2,2);
+  c.restore();
+}
+
+function drawPrisonGuard(c,x,y){
+  c.save(); c.translate(x,y);
+  c.fillStyle='#1a1a3a'; c.fillRect(-5,3,5,14); c.fillRect(0,3,5,14);
+  c.fillStyle='#2c3e80'; c.fillRect(-8,-20,16,25);
+  c.fillStyle='#222'; c.fillRect(-9,-1,18,3);
+  c.fillStyle='#2c3e80'; c.fillRect(-12,-16,5,14); c.fillRect(7,-16,5,14);
+  c.fillStyle='#deb887'; c.beginPath(); c.arc(0,-29,8,0,Math.PI*2); c.fill();
+  c.fillStyle='#1a1a3a'; c.fillRect(-9,-37,18,5); c.fillRect(-7,-40,14,4);
+  c.fillStyle='#333'; c.fillRect(12,-8,3,15);
+  c.restore();
+}
+
+/* =============== GUARD DIALOG =============== */
+const GD=[
+  {t:'Охранник: Чего надо?',o:[
+    {t:'Сколько мне ещё сидеть?',n:1},{t:'Как дела, начальник?',n:2},
+    {t:'Я невиновен!',n:3},{t:'Можно адвоката?',n:4},{t:'Ничего, извини.',n:-1}]},
+  {t:'Охранник: Сиди спокойно. Скоро выпустим, если не будешь дурить.',o:[{t:'Понял...',n:-1}]},
+  {t:'Охранник: Не твоего ума дело. Сиди и молчи.',o:[{t:'Ладно...',n:-1},{t:'Грубый ты.',n:5}]},
+  {t:'Охранник: Ага, все тут невиновные. Судье расскажешь.',o:[{t:'Это реально ошибка!',n:6},{t:'Молчу...',n:-1}]},
+  {t:'Охранник: Адвокат будет на суде. Жди.',o:[{t:'Хорошо.',n:-1}]},
+  {t:'Охранник: Ещё одно слово — добавлю срок.',o:[{t:'Молчу.',n:-1}]},
+  {t:'Охранник: Камеры, свидетели. Никаких ошибок.',o:[{t:'...',n:-1}]}
+];
+
+function startGuardDlg(){ pr.dlg=true; showDlg(GD[0].t,GD[0].o); }
+
+function showDlg(text,opts){
+  let box=$('dlg'), tEl=$('dlg-text'), oEl=$('dlg-opts');
+  box.style.display='block'; tEl.textContent=''; oEl.innerHTML='';
+  let i=0, iv=setInterval(()=>{
+    if(i<text.length){ tEl.textContent+=text[i]; i++; }
+    else{
+      clearInterval(iv);
+      opts.forEach(o=>{
+        let b=document.createElement('button');
+        b.textContent=o.t;
+        b.onclick=()=>{
+          Audio_.click();
+          if(o.n===-1){ hideDlg(); pr.dlg=false; pr.showF=true; pr.gx=560; }
+          else showDlg(GD[o.n].t,GD[o.n].o);
+        };
+        oEl.appendChild(b);
+      });
+    }
+  },25);
+}
+function hideDlg(){ $('dlg').style.display='none'; }
+
+function releasePr(esc){
+  Audio_.stopAll(); hideDlg();
+  stars=esc?1:0; violations=[]; spikes_=[];
+  spawnP(); spawnCops(2);
+  cCvs.style.display='none'; phase=PH.DRIVE;
+  showHint(esc?'Побег удался! Розыск: 1 звезда':'Вы свободны! Розыск обнулён.');
+  setTimeout(hideHint,3000);
+}
+
+/* =============== COURT =============== */
+function startCourt(){
+  phase=PH.COURT; cCvs.style.display='none';
+  $('court').style.display='block';
+  Audio_.stopAll();
+  ct={emo:'спокойствие',done:false};
+  renderCourt();
+}
+
+function renderCourt(){
+  let vl=violations.length?[...new Set(violations)]:['Нарушение ПДД'];
+  let vH=vl.map(v=>`<li style="margin:4px 0;color:#e74c3c">${v}</li>`).join('');
+  $('court').innerHTML=`
+  <div style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;padding:30px;color:#fff;font-family:monospace;overflow-y:auto">
+    <div style="font-size:26px;color:#FFD700;margin-bottom:4px">⚖️ СУДЕБНОЕ ЗАСЕДАНИЕ</div>
+    <div style="font-size:12px;color:#888;margin-bottom:18px">Городской суд</div>
+    <div style="display:flex;width:90%;max-width:860px;gap:16px;flex:1;min-height:0">
+      <div style="flex:1;display:flex;flex-direction:column;gap:8px">
+        <canvas id="court-cv" width="380" height="260" style="background:#1a1520;border-radius:6px;border:1px solid #333;width:100%"></canvas>
+        <div style="background:rgba(0,0,0,.5);border-radius:5px;padding:6px;text-align:center">
+          <div style="font-size:11px;color:#777;margin-bottom:4px">Ваша реакция:</div>
+          <div style="display:flex;gap:4px;justify-content:center;flex-wrap:wrap">
+            <button onclick="cEmo('раскаяние')" style="background:#27ae60;border:none;color:#fff;padding:4px 8px;border-radius:3px;cursor:pointer;font-size:11px">😢 Раскаяние</button>
+            <button onclick="cEmo('злость')" style="background:#e74c3c;border:none;color:#fff;padding:4px 8px;border-radius:3px;cursor:pointer;font-size:11px">😠 Злость</button>
+            <button onclick="cEmo('спокойствие')" style="background:#3498db;border:none;color:#fff;padding:4px 8px;border-radius:3px;cursor:pointer;font-size:11px">😐 Спокойствие</button>
+            <button onclick="cEmo('страх')" style="background:#8e44ad;border:none;color:#fff;padding:4px 8px;border-radius:3px;cursor:pointer;font-size:11px">😰 Страх</button>
+          </div>
+        </div>
+      </div>
+      <div style="flex:1;display:flex;flex-direction:column;gap:8px;min-height:0">
+        <div id="court-log" style="flex:1;background:rgba(0,0,0,.5);border-radius:6px;padding:12px;overflow-y:auto;font-size:13px;line-height:1.6">
+          <p style="color:#FFD700">Судья: Слушается дело о правонарушениях.</p>
+          <p style="color:#aaa">Обвинения:</p><ul style="padding-left:18px">${vH}</ul>
+          <p style="color:#FFD700">Судья: Подсудимый, вам предъявлено ${vl.length} обвинений. Розыск: ${stars} звёзд.</p>
+          <p style="color:#3498db">Адвокат: Ваша честь, мой подзащитный готов сотрудничать. Прошу учесть смягчающие обстоятельства и его чистосердечное признание.</p>
+          <p style="color:#FFD700">Судья: Подсудимый, что скажете в свою защиту?</p>
+        </div>
+        <div id="court-btns" style="background:rgba(0,0,0,.5);border-radius:6px;padding:8px;display:flex;flex-direction:column;gap:4px">
+          <div style="font-size:11px;color:#777;margin-bottom:2px">Ваш ответ:</div>
+          <button onclick="cResp('Я признаю вину и раскаиваюсь.',1)" style="background:rgba(39,174,96,.25);border:1px solid #27ae60;color:#fff;padding:6px 10px;border-radius:4px;cursor:pointer;font-size:12px;text-align:left">✅ «Я признаю вину и раскаиваюсь.»</button>
+          <button onclick="cResp('Я невиновен! Это недоразумение!',-1)" style="background:rgba(231,76,60,.25);border:1px solid #e74c3c;color:#fff;padding:6px 10px;border-radius:4px;cursor:pointer;font-size:12px;text-align:left">❌ «Я невиновен! Это недоразумение!»</button>
+          <button onclick="cResp('Хочу заключить сделку со следствием.',0.5)" style="background:rgba(52,152,219,.25);border:1px solid #3498db;color:#fff;padding:6px 10px;border-radius:4px;cursor:pointer;font-size:12px;text-align:left">🤝 «Хочу заключить сделку.»</button>
+          <button onclick="cResp('Без комментариев.',0)" style="background:rgba(149,165,166,.25);border:1px solid #95a5a6;color:#fff;padding:6px 10px;border-radius:4px;cursor:pointer;font-size:12px;text-align:left">🤐 «Без комментариев.»</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+  drawCourtCv();
+}
+
+window.cEmo = function(e){ ct.emo=e; Audio_.click(); drawCourtCv(); };
+
+window.cResp = function(text,mod){
+  if(ct.done) return; ct.done=true;
+  Audio_.click();
+  let log=$('court-log'), btns=$('court-btns');
+  log.innerHTML+=`<p style="color:#2ecc71;margin-top:8px">Вы: ${text}</p>`;
+
+  let red=mod;
+  if(ct.emo==='раскаяние') red+=.5;
+  if(ct.emo==='злость') red-=.5;
+  let sent=Math.max(1,Math.round(stars-red));
+  let secs=sent*8;
+
+  setTimeout(()=>{
+    log.innerHTML+=`<p style="color:#3498db">${red>0?'Адвокат: Прошу суд учесть раскаяние подзащитного.':'Адвокат: Мой подзащитный имеет право на свою позицию.'}</p>`;
+    log.scrollTop=log.scrollHeight;
+    setTimeout(()=>{
+      log.innerHTML+=`<p style="color:#FFD700;font-weight:bold">Судья: Учитывая обстоятельства дела...</p>`;
+      log.innerHTML+=`<p style="color:#FFD700;font-size:15px;font-weight:bold">ПРИГОВОР: ${secs} секунд заключения (${sent*24} ч. игрового времени)</p>`;
+      log.scrollTop=log.scrollHeight;
+      btns.innerHTML=`<button onclick="cFinish(${secs})" style="width:100%;background:rgba(255,215,0,.25);border:1px solid #FFD700;color:#fff;padding:10px;border-radius:4px;cursor:pointer;font-size:14px">Принять приговор</button>`;
+    },1800);
+  },1400);
+};
+
+window.cFinish = function(t){
+  $('court').style.display='none';
+  startPrison();
+  pr.dur=t; pr.rem=t;
+};
+
+function drawCourtCv(){
+  let cv=$('court-cv'); if(!cv) return;
+  let c=cv.getContext('2d'), w=380, h=260;
+  c.clearRect(0,0,w,h);
+  c.fillStyle='#2a1a10'; c.fillRect(0,0,w,h);
+  c.fillStyle='#4a3020'; c.fillRect(0,0,w,100);
+  // bench
+  c.fillStyle='#5a4030'; c.fillRect(120,70,140,40);
+  c.fillStyle='#6a5040'; c.fillRect(125,65,130,8);
+  // judge
+  c.fillStyle='#111'; c.fillRect(182,35,16,35);
+  c.fillStyle='#deb887'; c.beginPath(); c.arc(190,28,10,0,Math.PI*2); c.fill();
+  c.fillStyle='#111'; c.fillRect(180,18,20,6);
+  // gavel
+  c.fillStyle='#8B4513'; c.fillRect(240,78,16,6); c.fillRect(246,73,5,14);
+  // defendant
+  let ey=ct.emo==='раскаяние'?4:0;
+  c.fillStyle='#e67e22'; c.fillRect(72,145+ey,16,24);
+  c.fillStyle='#f5cba7'; c.beginPath(); c.arc(80,138+ey,9,0,Math.PI*2); c.fill();
+  // face
+  c.fillStyle='#333';
+  if(ct.emo==='злость'){ c.fillRect(75,136,3,2); c.fillRect(82,136,3,2); }
+  else if(ct.emo==='страх'){ c.beginPath();c.arc(78,136,2,0,Math.PI*2);c.fill(); c.beginPath();c.arc(83,136,2,0,Math.PI*2);c.fill(); }
+  else if(ct.emo==='раскаяние'){ c.fillRect(76,137,3,1.5); c.fillRect(82,137,3,1.5); }
+  else{ c.fillRect(76,137,3,1.5); c.fillRect(82,137,3,1.5); c.fillRect(77,143,6,1); }
+  // lawyer
+  c.fillStyle='#2c3e50'; c.fillRect(110,150,14,22);
+  c.fillStyle='#deb887'; c.beginPath(); c.arc(117,143,8,0,Math.PI*2); c.fill();
+  c.fillStyle='#2c3e50'; c.fillRect(113,137,8,4);
+  // prosecutor
+  c.fillStyle='#8e1a1a'; c.fillRect(250,150,14,22);
+  c.fillStyle='#deb887'; c.beginPath(); c.arc(257,143,8,0,Math.PI*2); c.fill();
+  // guard
+  c.fillStyle='#2c3e80'; c.fillRect(42,155,13,20);
+  c.fillStyle='#deb887'; c.beginPath(); c.arc(49,148,7,0,Math.PI*2); c.fill();
+  // floor
+  c.fillStyle='#3a2a1a'; c.fillRect(0,190,w,70);
+  c.fillStyle='#FFD700'; c.font='9px monospace'; c.textAlign='center'; c.fillText('ГОРОДСКОЙ СУД',w/2,250);
+}
+
+/* =============== MAIN DRAWING =============== */
+function drawGame(){
+  c.clearRect(0,0,W,H);
+  let cx=P.x-W/2, cy=P.y-H/2;
+  c.save(); c.translate(-cx,-cy);
+
+  let sx=Math.max(0,Math.floor(cx/T)-1), sy=Math.max(0,Math.floor(cy/T)-1);
+  let ex=Math.min(CW,Math.ceil((cx+W)/T)+1), ey=Math.min(CH,Math.ceil((cy+H)/T)+1);
+
+  // ground
+  c.fillStyle='#1a2a1a'; c.fillRect(cx-5,cy-5,W+10,H+10);
+
+  // roads
+  for(let ty=sy;ty<ey;ty++) for(let tx=sx;tx<ex;tx++){
+    let t_=grid[ty]?grid[ty][tx]:0, rx=tx*T, ry=ty*T;
+    if(t_===1){
+      c.fillStyle='#333'; c.fillRect(rx,ry,T,T);
+      c.fillStyle='#3e3e3e';
+      if(ty>0&&grid[ty-1]&&grid[ty-1][tx]>=1) c.fillRect(rx+T/2-.8,ry,1.6,T);
+      if(tx>0&&grid[ty][tx-1]>=1) c.fillRect(rx,ry+T/2-.8,T,1.6);
+    } else if(t_===2){
+      c.fillStyle='#363636'; c.fillRect(rx,ry,T,T);
+      c.fillStyle='#484848';
+      for(let s=0;s<T;s+=9){ c.fillRect(rx+s,ry,4,2); c.fillRect(rx+s,ry+T-2,4,2); }
+    }
+  }
+
+  // sidewalks
+  for(let ty=sy;ty<ey;ty++) for(let tx=sx;tx<ex;tx++){
+    if(!grid[ty]||grid[ty][tx]<1) continue;
+    let rx=tx*T, ry=ty*T;
+    if(ty>0&&grid[ty-1]&&grid[ty-1][tx]===0){ c.fillStyle='#4a4a4a'; c.fillRect(rx,ry,T,3); }
+    if(ty<CH-1&&grid[ty+1]&&grid[ty+1][tx]===0){ c.fillStyle='#4a4a4a'; c.fillRect(rx,ry+T-3,T,3); }
+    if(tx>0&&grid[ty][tx-1]===0){ c.fillStyle='#4a4a4a'; c.fillRect(rx,ry,3,T); }
+    if(tx<CW-1&&grid[ty][tx+1]===0){ c.fillStyle='#4a4a4a'; c.fillRect(rx+T-3,ry,3,T); }
+  }
+
+  // buildings
+  for(let b of blds){
+    if(b.x+b.w<cx||b.x>cx+W||b.y+b.h<cy||b.y>cy+H) continue;
+    c.fillStyle='rgba(0,0,0,.25)'; c.fillRect(b.x+3,b.y+3,b.w,b.h);
+    c.fillStyle=b.col; c.fillRect(b.x,b.y,b.w,b.h);
+    c.fillStyle='rgba(255,255,255,.04)'; c.fillRect(b.x,b.y,b.w,2);
+    c.fillStyle='#FFD700';
+    for(let wy=b.y+8;wy<b.y+b.h-8;wy+=12)
+      for(let wx=b.x+6;wx<b.x+b.w-6;wx+=12){
+        c.globalAlpha=Math.sin(wx*wy*.01+gameTime*.001)>.3?.4:.08;
+        c.fillRect(wx,wy,5,5);
+      }
+    c.globalAlpha=1;
+  }
+
+  // traffic lights
+  for(let tl of tlights){
+    if(Math.abs(tl.x-P.x)>W*.6||Math.abs(tl.y-P.y)>H*.6) continue;
+    c.fillStyle='#3a3a3a'; c.fillRect(tl.x-1.5,tl.y-12,3,12);
+    c.fillStyle='#1a1a1a'; c.fillRect(tl.x-5,tl.y-22,10,16);
+    c.fillStyle=tl.st==='r'?'#e74c3c':'#2ecc71';
+    c.beginPath(); c.arc(tl.x,tl.y-16,3.5,0,Math.PI*2); c.fill();
+    c.fillStyle=tl.st==='r'?'rgba(231,76,60,.12)':'rgba(46,204,113,.12)';
+    c.beginPath(); c.arc(tl.x,tl.y-16,16,0,Math.PI*2); c.fill();
+  }
+
+  // spikes
+  for(let sp of spikes_){
+    c.save(); c.translate(sp.x,sp.y); c.rotate(sp.a);
+    c.fillStyle='#c0392b'; c.fillRect(-22,-2.5,44,5);
+    c.fillStyle='#ff0';
+    for(let i=-18;i<18;i+=7){ c.beginPath(); c.moveTo(i,-5); c.lineTo(i+3.5,-10); c.lineTo(i+7,-5); c.fill(); }
+    c.restore();
+  }
+
+  // cops
+  for(let cp of cops) drawTopCar(cp.x,cp.y,cp.a,cp.w,cp.h,true);
+  // player
+  drawTopCar(P.x,P.y,P.a,P.w,P.h,false);
+
+  // drift marks
+  if(P.drift){
+    c.fillStyle='rgba(30,30,30,.4)';
+    c.beginPath(); c.arc(P.x-Math.sin(P.a)*4,P.y+Math.cos(P.a)*4,2.5,0,Math.PI*2); c.fill();
+  }
+
+  c.restore();
+
+  // vignette
+  if(vignetteI>0){
+    let gr=c.createRadialGradient(W/2,H/2,W*.28,W/2,H/2,W*.65);
+    gr.addColorStop(0,'rgba(0,0,0,0)');
+    gr.addColorStop(1,`rgba(90,0,0,${vignetteI})`);
+    c.fillStyle=gr; c.fillRect(0,0,W,H);
+  }
+
+  drawMinimap();
+  updHUD();
+}
+
+function drawTopCar(x,y,a,w,h,pol){
+  c.save(); c.translate(x,y); c.rotate(a);
+  c.fillStyle='rgba(0,0,0,.2)'; c.fillRect(-w/2+2,-h/2+2,w,h);
+  c.fillStyle=pol?'#2c3e50':'#c0392b'; c.fillRect(-w/2,-h/2,w,h);
+  c.fillStyle=pol?'#1a252f':'#962d22'; c.fillRect(-w/2+2,-h/2+2,w-4,h/3);
+  c.fillStyle='rgba(80,160,255,.35)'; c.fillRect(-w/2+4,-h/2+4,w-8,h/4.5);
+  c.fillStyle='rgba(60,60,60,.35)'; c.fillRect(-w/2+4,h/2-h/4.5,w-8,h/5);
+  c.fillStyle='#0e0e0e';
+  c.fillRect(-w/2-2,-h/2+4,4,8); c.fillRect(w/2-2,-h/2+4,4,8);
+  c.fillRect(-w/2-2,h/2-12,4,8); c.fillRect(w/2-2,h/2-12,4,8);
+  if(pol){
+    let bl=Math.sin(Date.now()*.012)>0;
+    c.fillStyle=bl?'#e74c3c':'#3498db'; c.fillRect(-7,-h/2+h/3,6,3.5);
+    c.fillStyle=bl?'#3498db':'#e74c3c'; c.fillRect(1,-h/2+h/3,6,3.5);
+    if(stars>0){ c.globalAlpha=.08; c.fillStyle=bl?'#e74c3c':'#3498db';
+      c.beginPath(); c.arc(0,-h/2+h/3,25,0,Math.PI*2); c.fill(); c.globalAlpha=1; }
+  } else {
+    c.fillStyle='#FFD700'; c.globalAlpha=.5;
+    c.fillRect(-w/2+2,-h/2,4,2.5); c.fillRect(w/2-6,-h/2,4,2.5);
+    c.globalAlpha=1;
+    c.fillStyle='#e74c3c';
+    c.fillRect(-w/2+2,h/2-2.5,4,2.5); c.fillRect(w/2-6,h/2-2.5,4,2.5);
+  }
+  c.restore();
+}
+
+function drawMinimap(){
+  let mw=170,mh=170;
+  mc.fillStyle='#0a0a0a'; mc.fillRect(0,0,mw,mh);
+  let sc=.38, ox_=mw/2-P.x*sc/T, oy_=mh/2-P.y*sc/T;
+  mc.fillStyle='#2a2a2a';
+  for(let ty=0;ty<CH;ty++) for(let tx=0;tx<CW;tx++){
+    if(grid[ty]&&grid[ty][tx]>=1){
+      let mx_=tx*sc+ox_, my_=ty*sc+oy_;
+      if(mx_>-1&&mx_<mw+1&&my_>-1&&my_<mh+1) mc.fillRect(mx_,my_,sc+.5,sc+.5);
+    }
+  }
+  mc.fillStyle='#3498db';
+  for(let cp of cops){ let px_=cp.x*sc/T+ox_, py_=cp.y*sc/T+oy_;
+    if(px_>0&&px_<mw&&py_>0&&py_<mh) mc.fillRect(px_-1,py_-1,3,3); }
+  mc.fillStyle='#ff0';
+  for(let sp of spikes_){ let sx_=sp.x*sc/T+ox_, sy_=sp.y*sc/T+oy_;
+    if(sx_>0&&sx_<mw&&sy_>0&&sy_<mh) mc.fillRect(sx_-1,sy_-1,2,2); }
+  mc.fillStyle='#e74c3c'; mc.fillRect(mw/2-2,mh/2-2,4,4);
+}
+
+function updHUD(){
+  let s=''; for(let i=0;i<5;i++) s+=i<stars?'★':'☆';
+  $('stars').textContent=s; $('stars').style.color=stars>0?'#FFD700':'#555';
+  $('speed').textContent=Math.round(Math.abs(P.spd)*38)+' км/ч';
+  $('fade').style.opacity=fadeA;
+}
+
+function showHint(t){ let e=$('hint'); e.textContent=t; e.style.opacity='1'; }
+function hideHint(){ $('hint').style.opacity='0'; }
+
+/* =============== LOOP =============== */
+function loop(t){
+  if(!running) return;
+  let dt=Math.min(3,(t-lastT)/16.67); lastT=t; gameTime=t;
+
+  if(phase===PH.DRIVE){ updDrive(dt); drawGame(); }
+  else if(phase===PH.PRISON){ updPrison(dt); }
+  else if(phase===PH.COURT){ /* UI driven */ }
+  else { updArrest(dt); }
+
+  requestAnimationFrame(loop);
+}
+
+function initGame(){
+  $('start').style.display='none';
+  Audio_.init(); genCity(); spawnP(); spawnCops(3);
+  running=true; lastT=performance.now();
+  requestAnimationFrame(loop);
+}
+</script>
+</body>
+</html>
